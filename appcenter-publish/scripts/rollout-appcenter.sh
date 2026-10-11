@@ -16,8 +16,11 @@ REGION="${AWS_REGION:-eu-central-1}"
 PUBLIC="https://$BUCKET.s3.$REGION.amazonaws.com/appcenter"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
-curl -fsSL --max-time 30 "$PUBLIC/$CHANNEL/manifest.json?nocache=$(date +%s)" -o "$WORK/old.json"
+# shellcheck source=manifest-s3.sh
+. "$(dirname "$0")/manifest-s3.sh"
 
+decide(){
+rm -f "$WORK/new.json"
 python3 - "$WORK/old.json" "$WORK/new.json" "$ACTION" "$APP" <<'PY'
 import json, os, sys, datetime
 src, dst, action, app = sys.argv[1:5]
@@ -85,12 +88,22 @@ m['generatedAt'] = now.isoformat(timespec='seconds')
 json.dump(m, open(dst, 'w'), indent=2, ensure_ascii=False)
 PY
 
-[ -f "$WORK/new.json" ] || exit 0
-# 引用的 blob 必须都在
-for KEY in $(python3 -c 'import json,sys; [print("appcenter/"+a["zip"]) for a in json.load(open(sys.argv[1]))["apps"].values()]' "$WORK/new.json"); do
-  aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1 || { echo "manifest 引用的 $KEY 不在 S3 上，中止"; exit 1; }
+}
+
+# 读 → 决定 → 带 ETag 条件写回；被别的发布抢先改过就重来（最多 5 次）
+for ATTEMPT in 1 2 3 4 5; do
+  manifest_get "$CHANNEL" "$WORK/old.json"
+  decide
+  [ -f "$WORK/new.json" ] || exit 0
+  # 引用的 blob 必须都在
+  for KEY in $(python3 -c 'import json,sys; [print("appcenter/"+a["zip"]) for a in json.load(open(sys.argv[1]))["apps"].values()]' "$WORK/new.json"); do
+    aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1 || { echo "manifest 引用的 $KEY 不在 S3 上，中止"; exit 1; }
+  done
+  RC=0; manifest_put "$CHANNEL" "$WORK/new.json" "$MANIFEST_ETAG" || RC=$?
+  [ "$RC" = 0 ] && break
+  [ "$RC" = 2 ] || exit 1
+  [ "$ATTEMPT" = 5 ] && { echo "连续 5 次被抢先改写，放弃"; exit 1; }
+  sleep $((RANDOM % 5 + 1))
 done
-aws s3 cp "$WORK/new.json" "s3://$BUCKET/appcenter/$CHANNEL/manifest.json" --acl public-read \
-  --content-type application/json --cache-control "no-cache" --only-show-errors
 echo "已更新 $PUBLIC/$CHANNEL/manifest.json"
 cat "$WORK/new.json"

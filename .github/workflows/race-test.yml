@@ -1,0 +1,36 @@
+# 临时：验证 manifest 条件写入在并发时不丢更新，验证完删除
+name: race-test
+on: workflow_dispatch
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  race:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        worker: [a, b, c]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Increment 5 times
+        env:
+          BUCKET: ${{ vars.BACKEND_BUCKET }}
+          W: ${{ matrix.worker }}
+        run: |
+          set -euo pipefail
+          aws --version
+          . appcenter-publish/scripts/manifest-s3.sh
+          T=$(mktemp -d)
+          for i in 1 2 3 4 5; do
+            for attempt in $(seq 1 20); do
+              manifest_get race-test "$T/m.json"
+              python3 -c 'import json,sys,os; p=sys.argv[1]; m=json.load(open(p)); m.setdefault("apps",{}); m["count"]=m.get("count",0)+1; m.setdefault("by",{}); m["by"][os.environ["W"]]=m["by"].get(os.environ["W"],0)+1; json.dump(m,open(p,"w"))' "$T/m.json"
+              rc=0; manifest_put race-test "$T/m.json" "$MANIFEST_ETAG" || rc=$?
+              [ $rc = 0 ] && { echo "$W 第 $i 次写入成功（尝试 $attempt）"; break; }
+              [ $rc = 2 ] || exit 1
+            done
+          done

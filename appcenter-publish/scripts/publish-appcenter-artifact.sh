@@ -36,9 +36,8 @@ PUBLIC="https://$BUCKET.s3.$REGION.amazonaws.com/appcenter"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
-# 现有 manifest（公开可读）；没有就当空的
-curl -fsSL --max-time 30 "$PUBLIC/$CHANNEL/manifest.json?nocache=$(date +%s)" -o "$WORK/old.json" 2>/dev/null \
-  || echo '{}' > "$WORK/old.json"
+# shellcheck source=manifest-s3.sh
+. "$ROOT/scripts/manifest-s3.sh"
 
 if [ "${ROLLOUT_ONLY:-0}" = "1" ]; then
   mkdir -p "$WORK/out" && echo '{"apps":{}}' > "$WORK/out/manifest.json"
@@ -46,6 +45,7 @@ else
   "$ROOT/scripts/build-appcenter-artifact.sh" -o "$WORK/out" "${APPS[@]}"
 fi
 
+merge(){
 # 合并：新构建的应用覆盖旧条目，其余应用原样保留；灰度 / ensureNoCache 按环境变量改，否则沿用
 python3 - "$WORK/old.json" "$WORK/out/manifest.json" "$WORK/final.json" <<'PY'
 import json, os, sys, datetime
@@ -117,6 +117,7 @@ if previous:
 json.dump(final, open(sys.argv[3], 'w'), indent=2, ensure_ascii=False)
 print('  rollout: %s   ensureNoCache: %s' % (json.dumps(rollout) if rollout is not None else '全量', ensure))
 PY
+}
 
 # 先传 blob（已存在就跳过，内容寻址不会变），再覆盖 manifest
 for z in "$WORK"/out/blobs/*.zip; do
@@ -131,10 +132,22 @@ for z in "$WORK"/out/blobs/*.zip; do
   fi
 done
 # manifest 引用的 blob 必须都在（防止只改灰度时引用了从没传过的包）
-for KEY in $(python3 -c 'import json,sys; [print("appcenter/"+a["zip"]) for a in json.load(open(sys.argv[1]))["apps"].values()]' "$WORK/final.json"); do
-  aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1 || { echo "manifest 引用的 $KEY 不在 S3 上，中止"; exit 1; }
+check_blobs(){
+  for KEY in $(python3 -c 'import json,sys; [print("appcenter/"+a["zip"]) for a in json.load(open(sys.argv[1]))["apps"].values()]' "$WORK/final.json"); do
+    aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1 || { echo "manifest 引用的 $KEY 不在 S3 上，中止"; return 1; }
+  done
+}
+
+# 读 → 合并 → 带 ETag 条件写回；被别的发布抢先改过就重来（最多 5 次）
+for ATTEMPT in 1 2 3 4 5; do
+  manifest_get "$CHANNEL" "$WORK/old.json"
+  merge
+  check_blobs
+  RC=0; manifest_put "$CHANNEL" "$WORK/final.json" "$MANIFEST_ETAG" || RC=$?
+  [ "$RC" = 0 ] && break
+  [ "$RC" = 2 ] || exit 1
+  [ "$ATTEMPT" = 5 ] && { echo "连续 5 次被抢先改写，放弃"; exit 1; }
+  sleep $((RANDOM % 5 + 1))
 done
-aws s3 cp "$WORK/final.json" "s3://$BUCKET/appcenter/$CHANNEL/manifest.json" --acl public-read \
-  --content-type application/json --cache-control "no-cache" --only-show-errors
 echo "已发布 $PUBLIC/$CHANNEL/manifest.json"
 cat "$WORK/final.json"
