@@ -1,36 +1,32 @@
-# 临时：验证 manifest 条件写入在并发时不丢更新，验证完删除
+# 临时：在 race-test channel 上端到端验证 publish / promote / rollback（门店只读 stable），验证完删除
 name: race-test
 on: workflow_dispatch
 permissions:
   id-token: write
   contents: read
 jobs:
-  race:
+  e2e:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        worker: [a, b, c]
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Increment 5 times
+      - name: e2e
         env:
           BUCKET: ${{ vars.BACKEND_BUCKET }}
-          W: ${{ matrix.worker }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          FORCE: "1"
+          AUTO_ROLLOUT: "1"
         run: |
           set -euo pipefail
-          aws --version
-          . appcenter-publish/scripts/manifest-s3.sh
-          T=$(mktemp -d)
-          for i in 1 2 3 4 5; do
-            for attempt in $(seq 1 20); do
-              manifest_get race-test "$T/m.json"
-              python3 -c 'import json,sys,os; p=sys.argv[1]; m=json.load(open(p)); m.setdefault("apps",{}); m["count"]=m.get("count",0)+1; m.setdefault("by",{}); m["by"][os.environ["W"]]=m["by"].get(os.environ["W"],0)+1; json.dump(m,open(p,"w"))' "$T/m.json"
-              rc=0; manifest_put race-test "$T/m.json" "$MANIFEST_ETAG" || rc=$?
-              [ $rc = 0 ] && { echo "$W 第 $i 次写入成功（尝试 $attempt）"; break; }
-              [ $rc = 2 ] || exit 1
-            done
-          done
+          S=appcenter-publish/scripts
+          mk(){ mkdir -p "$RUNNER_TEMP/src/$1"; echo "<html>$1 $2</html>" > "$RUNNER_TEMP/src/$1/index.html"; }
+          export APPCENTER_SRC="$RUNNER_TEMP/src"
+          show(){ curl -fsSL "https://$BUCKET.s3.$AWS_REGION.amazonaws.com/appcenter/race-test/manifest.json?n=$RANDOM" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("   顶层",d.get("rollout","全量"),"perApp",d.get("perAppRollout"),{k:(v["treeSha256"][:8],(v.get("rollout") or {}).get("percent","全量")) for k,v in d["apps"].items()},"prev",{k:v["treeSha256"][:8] for k,v in d.get("previousApps",{}).items()})'; }
+          echo "== 1 发布 TestA v1"; mk TestA v1; bash $S/publish-appcenter-artifact.sh race-test TestA >/dev/null; show
+          echo "== 2 发布 TestA v2 + 同时发布 TestB v1（并发）"; mk TestA v2; mk TestB v1
+          bash $S/publish-appcenter-artifact.sh race-test TestA >/dev/null & bash $S/publish-appcenter-artifact.sh race-test TestB >/dev/null & wait; show
+          echo "== 3 放量（PROMOTE_AFTER_HOURS=0）"; PROMOTE_AFTER_HOURS=0 bash $S/rollout-appcenter.sh race-test promote | grep -E "全量|放量"; show
+          echo "== 4 回滚 TestA"; bash $S/rollout-appcenter.sh race-test rollback TestA | grep 回滚; show
