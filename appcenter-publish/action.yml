@@ -20,6 +20,9 @@ inputs:
   dry-run:
     description: "true = 只打包、打印 manifest 条目，不碰 S3"
     default: "false"
+  version:
+    description: 写进 version.json 的版本号；不填就读调用方仓库根目录 package.json 的 version
+    default: ""
   role-to-assume:
     description: AWS OIDC 角色 ARN（dry-run 可不填）
     default: ""
@@ -36,12 +39,16 @@ runs:
       env:
         APP: ${{ inputs.app }}
         DIST: ${{ inputs.dist }}
+        VERSION_IN: ${{ inputs.version }}
       run: |
         [[ "$APP" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "app 名不合法: $APP"; exit 1; }
         [ -f "$DIST/index.html" ] || { echo "$DIST/index.html 不存在"; exit 1; }
         SRC="$RUNNER_TEMP/appcenter-src"
         rm -rf "$SRC" && mkdir -p "$SRC/$APP"
         rsync -a "$DIST/" "$SRC/$APP/"
+        # 版本遥测（A 层）：aaden-cli appcenter-usage 读这个文件上报各门店装的版本，云端 device_app_inventory.app_versions
+        python3 "$GITHUB_ACTION_PATH/scripts/version_json.py" "$SRC/$APP/version.json" "$APP" "$VERSION_IN"
+        cat "$SRC/$APP/version.json"
         echo "APPCENTER_SRC=$SRC" >> "$GITHUB_ENV"
 
     - name: Dry run
