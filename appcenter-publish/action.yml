@@ -1,0 +1,68 @@
+name: appcenter-publish
+description: >-
+  把前端构建产物发布到 AppCenter 的 S3 通道（门店设备由 aaden-cli appcenter-sync 每天拉取）。
+  默认自动灰度：ik0001 + deviceId%100<10，满 24 小时由 innerken-gmbh/workflows 的 appcenter-promote 自动全量。
+  dry-run 只打包不上传。
+
+inputs:
+  app:
+    description: AppCenter 里的应用目录名，例如 Admin、AdminV3
+    required: true
+  dist:
+    description: 构建产物目录（里面要有 index.html）
+    required: true
+  channel:
+    description: 设备读的 channel
+    default: stable
+  dry-run:
+    description: "true = 只打包、打印 manifest 条目，不碰 S3"
+    default: "false"
+  role-to-assume:
+    description: AWS OIDC 角色 ARN（dry-run 可不填）
+    default: ""
+  aws-region:
+    default: eu-central-1
+  bucket:
+    default: aaden-backend
+
+runs:
+  using: composite
+  steps:
+    - name: Stage
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        DIST: ${{ inputs.dist }}
+      run: |
+        [[ "$APP" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "app 名不合法: $APP"; exit 1; }
+        [ -f "$DIST/index.html" ] || { echo "$DIST/index.html 不存在"; exit 1; }
+        SRC="$RUNNER_TEMP/appcenter-src"
+        rm -rf "$SRC" && mkdir -p "$SRC/$APP"
+        rsync -a "$DIST/" "$SRC/$APP/"
+        echo "APPCENTER_SRC=$SRC" >> "$GITHUB_ENV"
+
+    - name: Dry run
+      if: ${{ inputs.dry-run == 'true' }}
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/build-appcenter-artifact.sh" -o "$RUNNER_TEMP/appcenter-out" "$APP" && cat "$RUNNER_TEMP/appcenter-out/manifest.json"
+
+    - name: Configure AWS
+      if: ${{ inputs.dry-run != 'true' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Publish
+      if: ${{ inputs.dry-run != 'true' }}
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        CHANNEL: ${{ inputs.channel }}
+        BUCKET: ${{ inputs.bucket }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        FORCE: "1"
+        AUTO_ROLLOUT: "1"
+      run: bash "$GITHUB_ACTION_PATH/scripts/publish-appcenter-artifact.sh" "$CHANNEL" "$APP"

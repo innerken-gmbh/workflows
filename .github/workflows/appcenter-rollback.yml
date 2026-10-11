@@ -1,0 +1,36 @@
+# AppCenter 回滚：把某个应用恢复成上一版（manifest 的 previousApps），并全量下发，已拿到新版的设备会退回去。
+name: appcenter-rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: '要回滚的应用，例如 Admin、AdminV3'
+        required: true
+      channel:
+        default: stable
+        required: true
+
+concurrency:
+  group: appcenter-manifest
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Rollback
+        env:
+          BUCKET: ${{ vars.BACKEND_BUCKET }}
+          APP: ${{ inputs.app }}
+          CHANNEL: ${{ inputs.channel }}
+        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" rollback "$APP"
