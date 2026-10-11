@@ -25,7 +25,8 @@ ATTR = re.compile(r'''(?:src|href)=["']?([^"'\s>]+)''')
 RUNTIME = re.compile(r'(js|css)/"\+\(\{([^}]*)\}\[\w+\]\|\|\w+\)\+"\."\+\{([^}]*)\}')
 PAIR = re.compile(r'"?([\w\-]+)"?:"([\w\-]+)"')
 # js/css 文本里的 hash 资源路径（url(../img/x.1234abcd.png)、n.p+"img/x.1234abcd.png" 等）
-ASSET_REF = re.compile(r'(?<![\w\-])((?:js|css|img|fonts|media)/[\w\-.@]+\.[0-9a-f]{8}\.[A-Za-z0-9]+)')
+# 可以带子目录前缀（如 admin/js/x.12345678.js：内嵌的子应用、service worker 的 precache 清单）
+ASSET_REF = re.compile(r'(?<![\w\-])((?:[\w\-@]+/)*(?:js|css|img|fonts|media)/[\w\-.@]+\.[0-9a-f]{8}\.[A-Za-z0-9]+)')
 PRECACHE = re.compile(r'precache-manifest\.[0-9a-f]+\.js')
 
 
@@ -41,6 +42,21 @@ def norm(ref):
 def read_text(path):
     with open(path, 'rb') as f:
         return f.read().decode('utf-8', 'replace')
+
+
+def app_root_of(root, ref):
+    """ref 所属的（子）应用目录：最近一个带 index.html 的上级目录，相对 root；根应用是 ''。
+    内嵌子应用（如 vue-app 的 public/admin）的 webpack runtime 和资源路径是相对它自己的目录写的。"""
+    d = os.path.dirname(ref)
+    while d:
+        if os.path.isfile(os.path.join(root, d, 'index.html')):
+            return d + '/'
+        d = os.path.dirname(d)
+    return ''
+
+
+def under(base, ref):
+    return ref if not base or ref.startswith(base) else base + ref
 
 
 def referenced(root):
@@ -63,11 +79,14 @@ def referenced(root):
         if not ref.endswith(('.js', '.css')):
             continue
         text = read_text(path)
+        base = app_root_of(root, ref)
         for kind, names, hashes in RUNTIME.findall(text):
             name_of = dict(PAIR.findall(names))
             for chunk, h in PAIR.findall(hashes):
-                queue.append('%s/%s.%s.%s' % (kind, name_of.get(chunk, chunk), h, kind))
-        queue += ASSET_REF.findall(text)
+                queue.append(under(base, '%s/%s.%s.%s' % (kind, name_of.get(chunk, chunk), h, kind)))
+        for r in ASSET_REF.findall(text):
+            # 不带前缀的按所属应用目录解析；已经带了所属目录前缀（或别的子应用前缀）的原样用
+            queue.append(r if os.path.isfile(os.path.join(root, r)) else under(base, r))
     return refs, missing
 
 
