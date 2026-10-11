@@ -56,8 +56,13 @@ first = not old
 min_days = float(os.environ.get('MIN_DAYS', '14'))
 force = os.environ.get('FORCE') == '1'
 
-apps = dict(old.get('apps', {}))
-previous = dict(old.get('previousApps', {}))
+# APPCENTER_KIND=rootApps：发布到 docroot 根（如老的 /App），条目放 rootApps，上一版放 previousRootApps
+kind = os.environ.get('APPCENTER_KIND', 'apps')
+if kind not in ('apps', 'rootApps'):
+    sys.exit('APPCENTER_KIND 只能是 apps 或 rootApps')
+prev_key = 'previousApps' if kind == 'apps' else 'previousRootApps'
+apps = dict(old.get(kind, {}))
+previous = dict(old.get(prev_key, {}))
 changed = []
 for name, entry in built.get('apps', {}).items():
     prev = apps.get(name)
@@ -87,7 +92,8 @@ if per_app:
     for name in changed:
         apps[name] = dict(apps[name], rollout={'devices': [1], 'percent': 10},
                           rolloutStartedAt=now.isoformat(timespec='seconds'))
-    gated = [n for n, e in apps.items() if e.get('rollout') is not None]
+    other = old.get('rootApps' if kind == 'apps' else 'apps', {})
+    gated = [n for n, e in list(apps.items()) + list(other.items()) if e.get('rollout') is not None]
     rollout = {'devices': [1], 'percent': 10} if gated else None
     started = None
 if os.environ.get('ROLLOUT') == 'all':
@@ -103,17 +109,20 @@ ensure = old.get('ensureNoCache', True)
 if os.environ.get('ENSURE_NOCACHE') in ('0', '1'):
     ensure = os.environ['ENSURE_NOCACHE'] == '1'
 
-final = {'generatedAt': now.isoformat(timespec='seconds'),
+final = dict(old)
+for k in ('rollout', 'rolloutStartedAt'):
+    final.pop(k, None)
+final.update({'generatedAt': now.isoformat(timespec='seconds'),
          **({'perAppRollout': True} if per_app else {}),
          'source': built.get('source', old.get('source')),
          'ensureNoCache': ensure,
-         'apps': apps}
+         kind: apps})
 if rollout is not None:
     final['rollout'] = rollout
     if started:
         final['rolloutStartedAt'] = started
 if previous:
-    final['previousApps'] = previous
+    final[prev_key] = previous
 json.dump(final, open(sys.argv[3], 'w'), indent=2, ensure_ascii=False)
 print('  rollout: %s   ensureNoCache: %s' % (json.dumps(rollout) if rollout is not None else '全量', ensure))
 PY
@@ -133,7 +142,7 @@ for z in "$WORK"/out/blobs/*.zip; do
 done
 # manifest 引用的 blob 必须都在（防止只改灰度时引用了从没传过的包）
 check_blobs(){
-  for KEY in $(python3 -c 'import json,sys; [print("appcenter/"+a["zip"]) for a in json.load(open(sys.argv[1]))["apps"].values()]' "$WORK/final.json"); do
+  for KEY in $(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); [print("appcenter/"+a["zip"]) for k in ("apps","rootApps") for a in (m.get(k) or {}).values()]' "$WORK/final.json"); do
     aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1 || { echo "manifest 引用的 $KEY 不在 S3 上，中止"; return 1; }
   done
 }

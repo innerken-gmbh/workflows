@@ -10,6 +10,10 @@ on:
       channel:
         default: stable
         required: true
+      kind:
+        description: 'apps = AppCenter/<app>；rootApps = docroot 根 /<app>（如 /App）'
+        default: apps
+        required: true
 
 concurrency:
   group: appcenter-manifest
@@ -33,4 +37,5 @@ jobs:
           BUCKET: ${{ vars.BACKEND_BUCKET }}
           APP: ${{ inputs.app }}
           CHANNEL: ${{ inputs.channel }}
-        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" rollback "$APP"
+          KIND: ${{ inputs.kind }}
+        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" rollback "$APP" "$KIND"

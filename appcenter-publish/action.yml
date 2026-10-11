@@ -11,6 +11,9 @@ inputs:
   dist:
     description: 构建产物目录（里面要有 index.html）
     required: true
+  kind:
+    description: "apps = AppCenter/<app>（默认）；rootApps = 门店 docroot 根 /<app>（如老的 /App，设备端要 aaden-cli 支持 rootApps）"
+    default: apps
   channel:
     description: 设备读的 channel
     default: stable
@@ -65,4 +68,5 @@ runs:
         AWS_REGION: ${{ inputs.aws-region }}
         FORCE: "1"
         AUTO_ROLLOUT: "1"
+        APPCENTER_KIND: ${{ inputs.kind }}
       run: bash "$GITHUB_ACTION_PATH/scripts/publish-appcenter-artifact.sh" "$CHANNEL" "$APP"

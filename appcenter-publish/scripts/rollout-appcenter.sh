@@ -10,6 +10,7 @@ set -euo pipefail
 CHANNEL="${1:?用法: $0 <channel> promote|rollback <App>}"
 ACTION="${2:?用法: $0 <channel> promote|rollback <App>}"
 APP="${3:-}"
+KIND="${4:-apps}"   # rollback 时：apps（AppCenter/<App>）或 rootApps（docroot 根 /<App>）
 [[ "$CHANNEL" =~ ^[a-z0-9-]+$ ]] || { echo "channel 只能是小写字母数字和 -"; exit 1; }
 BUCKET="${BUCKET:-aaden-backend}"
 REGION="${AWS_REGION:-eu-central-1}"
@@ -21,9 +22,9 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 decide(){
 rm -f "$WORK/new.json"
-python3 - "$WORK/old.json" "$WORK/new.json" "$ACTION" "$APP" <<'PY'
+python3 - "$WORK/old.json" "$WORK/new.json" "$ACTION" "$APP" "$KIND" <<'PY'
 import json, os, sys, datetime
-src, dst, action, app = sys.argv[1:5]
+src, dst, action, app, kind = sys.argv[1:6]
 m = json.load(open(src))
 now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -39,17 +40,19 @@ def strip(e):
 changed = False
 if action == 'promote':
     if m.get('perAppRollout') is True:
-        for name, e in m.get('apps', {}).items():
-            if e.get('rollout') is None:
-                continue
-            ok, hours = due(e.get('rolloutStartedAt'))
-            if hours is None:
-                print('%s 灰度没有开始时间（手动设的），不自动放量' % name)
-            elif not ok:
-                print('%s 灰度才 %.1f 小时，先不放量' % (name, hours))
-            else:
-                m['apps'][name] = strip(e); changed = True
-                print('%s 灰度已满 %.1f 小时 → 全量' % (name, hours))
+        for k in ('apps', 'rootApps'):
+            for name, e in (m.get(k) or {}).items():
+                label = name if k == 'apps' else '/' + name
+                if e.get('rollout') is None:
+                    continue
+                ok, hours = due(e.get('rolloutStartedAt'))
+                if hours is None:
+                    print('%s 灰度没有开始时间（手动设的），不自动放量' % label)
+                elif not ok:
+                    print('%s 灰度才 %.1f 小时，先不放量' % (label, hours))
+                else:
+                    m[k][name] = strip(e); changed = True
+                    print('%s 灰度已满 %.1f 小时 → 全量' % (label, hours))
     else:
         ok, hours = due(m.get('rolloutStartedAt'))
         if 'rollout' not in m:
@@ -62,13 +65,16 @@ if action == 'promote':
             m.pop('rollout'); m.pop('rolloutStartedAt'); changed = True
             print('灰度已满 %.1f 小时 → 全量' % hours)
 elif action == 'rollback':
-    prev = m.get('previousApps', {}).get(app)
+    if kind not in ('apps', 'rootApps'):
+        sys.exit('kind 只能是 apps 或 rootApps')
+    pk = 'previousApps' if kind == 'apps' else 'previousRootApps'
+    prev = m.get(pk, {}).get(app)
     if not prev:
-        sys.exit('previousApps 里没有 %s 的上一版，不能回滚' % app)
-    cur = m.get('apps', {}).get(app, {})
-    print('%s 回滚：%s → %s' % (app, cur.get('treeSha256', '?')[:12], prev['treeSha256'][:12]))
-    m['apps'][app] = strip(prev)
-    m['previousApps'].pop(app)
+        sys.exit('%s 里没有 %s 的上一版，不能回滚' % (pk, app))
+    cur = m.get(kind, {}).get(app, {})
+    print('%s%s 回滚：%s → %s' % ('' if kind == 'apps' else '/', app, cur.get('treeSha256', '?')[:12], prev['treeSha256'][:12]))
+    m[kind][app] = strip(prev)
+    m[pk].pop(app)
     if m.get('perAppRollout') is not True:
         m.pop('rollout', None); m.pop('rolloutStartedAt', None)
     changed = True
@@ -79,7 +85,7 @@ if not changed:
     sys.exit(0)
 if m.get('perAppRollout') is True:
     # 顶层 rollout 留给不认 perAppRollout 的老 CLI：还有应用在灰度就保持 ik0001 + 10%
-    if any(e.get('rollout') is not None for e in m.get('apps', {}).values()):
+    if any(e.get('rollout') is not None for k in ('apps', 'rootApps') for e in (m.get(k) or {}).values()):
         m['rollout'] = {'devices': [1], 'percent': 10}
     else:
         m.pop('rollout', None)
@@ -96,7 +102,7 @@ for ATTEMPT in 1 2 3 4 5; do
   decide
   [ -f "$WORK/new.json" ] || exit 0
   # 引用的 blob 必须都在
-  for KEY in $(python3 -c 'import json,sys; [print("appcenter/"+a["zip"]) for a in json.load(open(sys.argv[1]))["apps"].values()]' "$WORK/new.json"); do
+  for KEY in $(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); [print("appcenter/"+a["zip"]) for k in ("apps","rootApps") for a in (m.get(k) or {}).values()]' "$WORK/new.json"); do
     aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1 || { echo "manifest 引用的 $KEY 不在 S3 上，中止"; exit 1; }
   done
   RC=0; manifest_put "$CHANNEL" "$WORK/new.json" "$MANIFEST_ETAG" || RC=$?
