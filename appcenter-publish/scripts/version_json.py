@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-写 AppCenter 应用的 version.json：{"app","version","commit","ref","repo","builtAt"}。
+写 AppCenter 应用的 version.json：{"app","version","commit","ref","repo","committedAt"}。
 门店上 aaden-cli appcenter-usage 读它，上报每个前端目录装的是哪个版本（前端版本遥测 A 层）。
 version 优先用参数，其次调用方仓库根目录 package.json 的 version，都没有就是 "unknown"。
+内容必须只由提交决定：同一个 commit 重发要得到一模一样的文件，否则 treeSha 变了，
+manifest 去重失效（全网重新灰度、重新下载），回滚位还会被内容相同的这次构建顶掉。所以不写当前时间，写 commit 时间。
 
 用法: version_json.py <输出文件> <App> [version]
 """
-import datetime
 import json
 import os
+import subprocess
 import sys
 
 out, app = sys.argv[1], sys.argv[2]
@@ -20,13 +22,19 @@ if not version:
             version = str(json.load(f).get('version') or '').strip()
     except (OSError, ValueError):
         version = ''
+workspace = os.environ.get('GITHUB_WORKSPACE', '.')
+try:
+    committed_at = subprocess.run(['git', '-C', workspace, 'log', '-1', '--format=%cI'],
+                                  capture_output=True, text=True, timeout=10).stdout.strip()
+except (OSError, subprocess.SubprocessError):
+    committed_at = ''
 data = {
     'app': app,
     'version': version or 'unknown',
     'commit': (os.environ.get('GITHUB_SHA') or '')[:12] or 'unknown',
     'ref': os.environ.get('GITHUB_REF_NAME', ''),
     'repo': os.environ.get('GITHUB_REPOSITORY', ''),
-    'builtAt': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'committedAt': committed_at or 'unknown',
 }
 with open(out, 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False)
