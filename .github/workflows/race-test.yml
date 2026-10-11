@@ -15,7 +15,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 16
-      - run: npm install --ignore-scripts
+      # 跳过根目录 postinstall（electron-builder install-app-deps），但 electron 和 node-sass 自己的安装脚本要跑
+      - run: npm install --ignore-scripts && npm rebuild electron node-sass
       - run: npx vue-cli-service build
       - uses: innerken-gmbh/workflows/appcenter-publish@main
         with:
