@@ -22,6 +22,7 @@ steps:
 - **自动放量**：`appcenter-promote` 每小时检查一次，哪个应用灰度满 24 小时，就把哪个应用放到全量。
 - **回滚**：在本仓库手动跑 `appcenter-rollback`，选应用。该应用恢复成上一版（`previousApps`）并全量下发。
 - **兼容老设备**：按应用灰度要 aaden-cli 支持 `perAppRollout`（innerken-gmbh/aaden-cli#25）。老版本 CLI 只看顶层 `rollout`，所以只要还有应用在灰度，顶层就保持 ik0001 + 10%，全部放完才去掉。老设备上几个应用还是一起放量，只是慢一点。
+- **并发安全**：manifest 读写用 S3 的 ETag 条件写入（`--if-match`），两个仓库或分支同时发布时，后写的一方会收到 412，自动重读、重新合并再写，最多重试 5 次（2026-10-11 用 3 个并发任务实测，没有更新丢失）。
 - 不做「两次发布间隔 14 天」的检查（FORCE），连续发版可能导致白屏，见 Jira POS-27。
 
 AWS 用 OIDC 角色 `github-appcenter-publish`，只能读写 `s3://aaden-backend/appcenter/*`，信任 innerken-gmbh 的 workflows、aaden-vue-admin、aaden-php-backend。
