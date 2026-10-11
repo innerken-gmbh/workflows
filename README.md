@@ -18,11 +18,11 @@ steps:
       role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
 ```
 
-- **自动灰度**：有内容变化时，灰度重置为 ik0001 + `deviceId % 100 < 10`，记下 `rolloutStartedAt`。
-- **自动放量**：`appcenter-promote` 每小时检查一次，灰度满 24 小时就全量。
+- **按应用自动灰度**：有内容变化的应用写 `apps.<App>.rollout`（ik0001 + `deviceId % 100 < 10`）和 `apps.<App>.rolloutStartedAt`，manifest 标 `perAppRollout: true`。
+- **自动放量**：`appcenter-promote` 每小时检查一次，哪个应用灰度满 24 小时，就把哪个应用放到全量。
 - **回滚**：在本仓库手动跑 `appcenter-rollback`，选应用。该应用恢复成上一版（`previousApps`）并全量下发。
+- **兼容老设备**：按应用灰度要 aaden-cli 支持 `perAppRollout`（innerken-gmbh/aaden-cli#25）。老版本 CLI 只看顶层 `rollout`，所以只要还有应用在灰度，顶层就保持 ik0001 + 10%，全部放完才去掉。老设备上几个应用还是一起放量，只是慢一点。
 - 不做「两次发布间隔 14 天」的检查（FORCE），连续发版可能导致白屏，见 Jira POS-27。
-- 灰度是整个 channel 共用的：任何一个应用一发布，正在灰度的其他应用也会重新从 10% 开始。
 
 AWS 用 OIDC 角色 `github-appcenter-publish`，只能读写 `s3://aaden-backend/appcenter/*`，信任 innerken-gmbh 的 workflows、aaden-vue-admin、aaden-php-backend。
 

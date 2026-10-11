@@ -19,9 +19,11 @@
 #   设备只保留上一代文件，这段时间内连发两版，缓存着更老 index.html 的页面会去请求已删掉的 chunk → 白屏。
 #   全网 ensureNoCache 生效满两周后可以把 MIN_DAYS 调成 0。
 #
-# 自动灰度（AUTO_ROLLOUT=1，CI 发布用）：有应用换了内容时，灰度重置为 ik0001 + deviceId%100<10，
-#   记下 rolloutStartedAt；满 24 小时由 promote-appcenter-rollout.py 自动全量。被替换的旧条目存进
-#   previousApps，回滚时恢复（设备只读 rollout / ensureNoCache / apps，多出来的字段不影响设备）。
+# 自动灰度（AUTO_ROLLOUT=1，CI 发布用）：按应用灰度。换了内容的应用写 apps.<App>.rollout = ik0001 + deviceId%100<10
+#   和 apps.<App>.rolloutStartedAt，满 24 小时由 rollout-appcenter.sh promote 自动全量；被替换的旧条目存进 previousApps，
+#   回滚时恢复。manifest 标 perAppRollout=true（aaden-cli >= 支持 perAppRollout 的版本按应用判断）；
+#   顶层 rollout 留给老 CLI：只要还有应用在灰度，顶层就是 ik0001 + 10%，全部放完就去掉。
+#   第一次切到按应用时，没有自己 rollout 的应用继承当时的顶层 rollout（没有开始时间 = 不自动放量）。
 #
 # 需要能写 BUCKET 的 AWS 凭据（本地 aws 配置，或 GitHub Actions 的 publish-appcenter-artifact 工作流）。
 set -euo pipefail
@@ -75,9 +77,19 @@ for name, entry in built.get('apps', {}).items():
 
 rollout = old.get('rollout', {'devices': [1], 'percent': 0} if first else None)
 started = old.get('rolloutStartedAt')
-if os.environ.get('AUTO_ROLLOUT') == '1' and changed:
-    rollout = {'devices': [1], 'percent': 10}
-    started = now.isoformat(timespec='seconds')
+per_app = old.get('perAppRollout') is True or os.environ.get('AUTO_ROLLOUT') == '1'
+if per_app:
+    if old.get('perAppRollout') is not True and old.get('rollout') is not None:
+        # 切换到按应用：原来整体灰度着的应用继承顶层 rollout，不带开始时间（不自动放量）
+        for name, entry in apps.items():
+            if name not in changed and 'rollout' not in entry:
+                apps[name] = dict(entry, rollout=old['rollout'])
+    for name in changed:
+        apps[name] = dict(apps[name], rollout={'devices': [1], 'percent': 10},
+                          rolloutStartedAt=now.isoformat(timespec='seconds'))
+    gated = [n for n, e in apps.items() if e.get('rollout') is not None]
+    rollout = {'devices': [1], 'percent': 10} if gated else None
+    started = None
 if os.environ.get('ROLLOUT') == 'all':
     rollout = None
 elif os.environ.get('ROLLOUT_DEVICES') is not None or os.environ.get('ROLLOUT_PERCENT') is not None:
@@ -92,6 +104,7 @@ if os.environ.get('ENSURE_NOCACHE') in ('0', '1'):
     ensure = os.environ['ENSURE_NOCACHE'] == '1'
 
 final = {'generatedAt': now.isoformat(timespec='seconds'),
+         **({'perAppRollout': True} if per_app else {}),
          'source': built.get('source', old.get('source')),
          'ensureNoCache': ensure,
          'apps': apps}

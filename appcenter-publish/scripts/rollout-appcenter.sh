@@ -1,10 +1,11 @@
 #!/bin/bash
 # AppCenter 灰度的自动放量和回滚，只改 manifest，不传包。
 #
-#   rollout-appcenter.sh <channel> promote          灰度开始（rolloutStartedAt）满 PROMOTE_AFTER_HOURS（默认 24）→ 去掉灰度门，全量
+#   rollout-appcenter.sh <channel> promote          按应用：apps.<App>.rolloutStartedAt 满 PROMOTE_AFTER_HOURS（默认 24）→ 该应用全量
 #   rollout-appcenter.sh <channel> rollback <App>   <App> 恢复成 previousApps 里的上一版，并且全量（已经拿到新版的设备退回去）
 #
-# 没有 rolloutStartedAt 的灰度（手动设的）不会被自动放量。
+# 没有开始时间的灰度（手动设的）不会被自动放量。manifest 没有 perAppRollout 时按老规则（顶层 rolloutStartedAt）。
+# 顶层 rollout 留给老 CLI：还有应用在灰度就保持 ik0001 + 10%，都放完了就去掉。
 set -euo pipefail
 CHANNEL="${1:?用法: $0 <channel> promote|rollback <App>}"
 ACTION="${2:?用法: $0 <channel> promote|rollback <App>}"
@@ -23,30 +24,63 @@ src, dst, action, app = sys.argv[1:5]
 m = json.load(open(src))
 now = datetime.datetime.now(datetime.timezone.utc)
 
-if action == 'promote':
-    started = m.get('rolloutStartedAt')
-    if 'rollout' not in m:
-        print('已经是全量，不用放量'); sys.exit(0)
+def due(started):
     if not started:
-        print('灰度没有 rolloutStartedAt（手动设的），不自动放量'); sys.exit(0)
+        return False, None
     hours = (now - datetime.datetime.fromisoformat(started)).total_seconds() / 3600
-    need = float(os.environ.get('PROMOTE_AFTER_HOURS', '24'))
-    if hours < need:
-        print('灰度才 %.1f 小时（< %g），先不放量' % (hours, need)); sys.exit(0)
-    m.pop('rollout'); m.pop('rolloutStartedAt')
-    print('灰度已满 %.1f 小时 → 全量' % hours)
+    return hours >= float(os.environ.get('PROMOTE_AFTER_HOURS', '24')), hours
+
+def strip(e):
+    return {k: v for k, v in e.items() if k not in ('rollout', 'rolloutStartedAt')}
+
+changed = False
+if action == 'promote':
+    if m.get('perAppRollout') is True:
+        for name, e in m.get('apps', {}).items():
+            if e.get('rollout') is None:
+                continue
+            ok, hours = due(e.get('rolloutStartedAt'))
+            if hours is None:
+                print('%s 灰度没有开始时间（手动设的），不自动放量' % name)
+            elif not ok:
+                print('%s 灰度才 %.1f 小时，先不放量' % (name, hours))
+            else:
+                m['apps'][name] = strip(e); changed = True
+                print('%s 灰度已满 %.1f 小时 → 全量' % (name, hours))
+    else:
+        ok, hours = due(m.get('rolloutStartedAt'))
+        if 'rollout' not in m:
+            print('已经是全量，不用放量')
+        elif hours is None:
+            print('灰度没有 rolloutStartedAt（手动设的），不自动放量')
+        elif not ok:
+            print('灰度才 %.1f 小时，先不放量' % hours)
+        else:
+            m.pop('rollout'); m.pop('rolloutStartedAt'); changed = True
+            print('灰度已满 %.1f 小时 → 全量' % hours)
 elif action == 'rollback':
     prev = m.get('previousApps', {}).get(app)
     if not prev:
         sys.exit('previousApps 里没有 %s 的上一版，不能回滚' % app)
     cur = m.get('apps', {}).get(app, {})
     print('%s 回滚：%s → %s' % (app, cur.get('treeSha256', '?')[:12], prev['treeSha256'][:12]))
-    m['apps'][app] = prev
+    m['apps'][app] = strip(prev)
     m['previousApps'].pop(app)
-    m.pop('rollout', None); m.pop('rolloutStartedAt', None)
+    if m.get('perAppRollout') is not True:
+        m.pop('rollout', None); m.pop('rolloutStartedAt', None)
+    changed = True
 else:
     sys.exit('未知操作 %s' % action)
 
+if not changed:
+    sys.exit(0)
+if m.get('perAppRollout') is True:
+    # 顶层 rollout 留给不认 perAppRollout 的老 CLI：还有应用在灰度就保持 ik0001 + 10%
+    if any(e.get('rollout') is not None for e in m.get('apps', {}).values()):
+        m['rollout'] = {'devices': [1], 'percent': 10}
+    else:
+        m.pop('rollout', None)
+    m.pop('rolloutStartedAt', None)
 m['generatedAt'] = now.isoformat(timespec='seconds')
 json.dump(m, open(dst, 'w'), indent=2, ensure_ascii=False)
 PY
