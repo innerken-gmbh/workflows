@@ -1,0 +1,26 @@
+# 临时：用 vue-app master 构建，发布到 race-test channel 的 rootApps/App，给 ik0001 真机验证 /App 同步；验证完删除
+name: race-test
+on: workflow_dispatch
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  build-root-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: innerken-gmbh/aaden-vue-app
+          ref: master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 16
+      - run: npm install --ignore-scripts
+      - run: npx vue-cli-service build
+      - uses: innerken-gmbh/workflows/appcenter-publish@main
+        with:
+          app: App
+          kind: rootApps
+          dist: dist
+          channel: race-test
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
