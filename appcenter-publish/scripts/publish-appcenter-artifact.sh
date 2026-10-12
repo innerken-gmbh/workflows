@@ -1,7 +1,7 @@
 #!/bin/bash
 # 发布 AppCenter 前端到 S3，设备每天由 aaden-cli appcenter-sync（AadenDeploy/appCenterSync.sh）拉取。
 #
-#   s3://<bucket>/appcenter/blobs/<App>-<sha12>.zip    内容寻址，已存在就不重传
+#   s3://<bucket>/appcenter/blobs/<App>-<treeSha12>-<zipSha12>.zip    按 zip 字节寻址，已存在就不重传（同名必同字节）
 #   s3://<bucket>/appcenter/<channel>/manifest.json   唯一会变的文件：先传 blob 再覆盖它
 #
 # 用法:
@@ -128,7 +128,7 @@ print('  rollout: %s   ensureNoCache: %s' % (json.dumps(rollout) if rollout is n
 PY
 }
 
-# 先传 blob（已存在就跳过，内容寻址不会变），再覆盖 manifest
+# 先传 blob（已存在就跳过：名字里带 zipSha，同名就是同一个包），再覆盖 manifest
 for z in "$WORK"/out/blobs/*.zip; do
   [ -e "$z" ] || continue
   KEY="appcenter/blobs/$(basename "$z")"

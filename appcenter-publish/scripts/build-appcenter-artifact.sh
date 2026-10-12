@@ -1,7 +1,7 @@
 #!/bin/bash
 # 产出 appcenter-sync 通道用的前端产物（设备端：aaden-cli AadenDeploy/appCenterSync.sh）。
 #
-#   <out>/blobs/<App>-<treeSha前12位>.zip   内容寻址，上传后不再改
+#   <out>/blobs/<App>-<treeSha前12位>-<zipSha前12位>.zip   按 zip 字节寻址，上传后不再改
 #   <out>/manifest.json                     {"apps":{"<App>":{"treeSha256","zip","zipSha256","size"}}}
 #
 # 发布 = 先传 blobs/，再覆盖 <channel>/manifest.json。设备只认 manifest 里的 treeSha256：
@@ -29,10 +29,14 @@ for APP in "$@"; do
   rsync -a --exclude '.git' --exclude '.DS_Store' "$SRC/$APP/" "$OUT/stage/$APP/"
   python3 "$PY" prune "$OUT/stage/$APP"
   TREE=$(python3 "$PY" manifest "$OUT/stage/$APP")
-  ZIP="blobs/$APP-${TREE:0:12}.zip"
   # -X 不带 uid/gid 等扩展属性；设备上解压后统一 chown www-data
-  (cd "$OUT/stage/$APP" && zip -qrX "$OUT/$ZIP" .)
-  ZSHA=$(shasum -a 256 "$OUT/$ZIP" | cut -d' ' -f1)
+  # zip 字节不是确定的（文件时间戳等），同一个 tree 每次打出来的包可能不一样。所以 blob 名字里必须带 zipSha：
+  # 只按 treeSha 命名时，另一次打包先传了同名 blob，这次发布就会「已存在跳过上传」却在 manifest 里写自己的 zipSha，
+  # 设备下载到的是别人的包，全部 APP_ABORT_CHECKSUM（2026-10-11 race-test 和 vue-app master 先后发 /App 就是这样）
+  (cd "$OUT/stage/$APP" && zip -qrX "$OUT/blobs/$APP.tmp.zip" .)
+  ZSHA=$(shasum -a 256 "$OUT/blobs/$APP.tmp.zip" | cut -d' ' -f1)
+  ZIP="blobs/$APP-${TREE:0:12}-${ZSHA:0:12}.zip"
+  mv "$OUT/blobs/$APP.tmp.zip" "$OUT/$ZIP"
   SIZE=$(wc -c < "$OUT/$ZIP" | tr -d ' ')
   echo "   treeSha256=$TREE  $ZIP  $(du -h "$OUT/$ZIP" | cut -f1)"
   ENTRIES="$ENTRIES${ENTRIES:+,}\"$APP\":{\"treeSha256\":\"$TREE\",\"zip\":\"$ZIP\",\"zipSha256\":\"$ZSHA\",\"size\":$SIZE}"
