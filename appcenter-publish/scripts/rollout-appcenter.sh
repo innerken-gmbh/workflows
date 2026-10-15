@@ -5,7 +5,8 @@
 #   rollout-appcenter.sh <channel> rollback <App>   <App> 恢复成 previousApps 里的上一版，并且全量（已经拿到新版的设备退回去）
 #
 # 没有开始时间的灰度（手动设的）不会被自动放量。manifest 没有 perAppRollout 时按老规则（顶层 rolloutStartedAt）。
-# 顶层 rollout 留给老 CLI：还有应用在灰度就保持 ik0001 + 10%，都放完了就去掉。
+# 按应用灰度时顶层 rollout 一律去掉（POS-157）：新 CLI 用它决定 ensureNoCache，留着会把 index.html no-cache 卡在 10%。
+# promote 遇到还带着顶层 rollout 的按应用 manifest，也会顺手把它去掉。
 set -euo pipefail
 CHANNEL="${1:?用法: $0 <channel> promote|rollback <App>}"
 ACTION="${2:?用法: $0 <channel> promote|rollback <App>}"
@@ -40,6 +41,9 @@ def strip(e):
 changed = False
 if action == 'promote':
     if m.get('perAppRollout') is True:
+        if 'rollout' in m:
+            print('去掉顶层 rollout %s（按应用灰度不再用它，POS-157）' % json.dumps(m['rollout']))
+            changed = True
         for k in ('apps', 'rootApps'):
             for name, e in (m.get(k) or {}).items():
                 label = name if k == 'apps' else '/' + name
@@ -84,11 +88,8 @@ else:
 if not changed:
     sys.exit(0)
 if m.get('perAppRollout') is True:
-    # 顶层 rollout 留给不认 perAppRollout 的老 CLI：还有应用在灰度就保持 ik0001 + 10%
-    if any(e.get('rollout') is not None for k in ('apps', 'rootApps') for e in (m.get(k) or {}).values()):
-        m['rollout'] = {'devices': [1], 'percent': 10}
-    else:
-        m.pop('rollout', None)
+    # 顶层 rollout 不再为老 CLI 保留（POS-157）
+    m.pop('rollout', None)
     m.pop('rolloutStartedAt', None)
 m['generatedAt'] = now.isoformat(timespec='seconds')
 json.dump(m, open(dst, 'w'), indent=2, ensure_ascii=False)
