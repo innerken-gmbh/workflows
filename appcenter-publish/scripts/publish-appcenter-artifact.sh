@@ -22,7 +22,8 @@
 # 自动灰度（AUTO_ROLLOUT=1，CI 发布用）：按应用灰度。换了内容的应用写 apps.<App>.rollout = ik0001 + deviceId%100<10
 #   和 apps.<App>.rolloutStartedAt，满 24 小时由 rollout-appcenter.sh promote 自动全量；被替换的旧条目存进 previousApps，
 #   回滚时恢复。manifest 标 perAppRollout=true（aaden-cli >= 支持 perAppRollout 的版本按应用判断）；
-#   顶层 rollout 留给老 CLI：只要还有应用在灰度，顶层就是 ik0001 + 10%，全部放完就去掉。
+#   顶层 rollout：按应用灰度时不再设（POS-157）。新 CLI 用顶层 rollout 决定 ensureNoCache，以前「还有应用在灰度就保持
+#   ik0001 + 10%」把 index.html no-cache 卡在了 10%；不认 perAppRollout 的老 CLI（< 1.6.119，10-15 只剩 8 台）因此不再灰度。
 #   第一次切到按应用时，没有自己 rollout 的应用继承当时的顶层 rollout（没有开始时间 = 不自动放量）。
 #
 # 需要能写 BUCKET 的 AWS 凭据（本地 aws 配置，或 GitHub Actions 的 publish-appcenter-artifact 工作流）。
@@ -93,8 +94,8 @@ if per_app:
         apps[name] = dict(apps[name], rollout={'devices': [1], 'percent': 10},
                           rolloutStartedAt=now.isoformat(timespec='seconds'))
     other = old.get('rootApps' if kind == 'apps' else 'apps', {})
-    gated = [n for n, e in list(apps.items()) + list(other.items()) if e.get('rollout') is not None]
-    rollout = {'devices': [1], 'percent': 10} if gated else None
+    # 顶层 rollout 不再为老 CLI 卡 10%（POS-157，见脚本头）；要手动设还可以用 ROLLOUT_DEVICES / ROLLOUT_PERCENT
+    rollout = None
     started = None
 if os.environ.get('ROLLOUT') == 'all':
     rollout = None
