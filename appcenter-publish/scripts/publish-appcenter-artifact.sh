@@ -37,6 +37,8 @@ BUCKET="${BUCKET:-aaden-backend}"
 REGION="${AWS_REGION:-eu-central-1}"
 PUBLIC="https://$BUCKET.s3.$REGION.amazonaws.com/appcenter"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# 和 build-appcenter-artifact.sh 的默认值一致（合并时从这里读各应用的 version.json）
+export APPCENTER_SRC="${APPCENTER_SRC:-$ROOT/AppCenter}"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 # shellcheck source=manifest-s3.sh
