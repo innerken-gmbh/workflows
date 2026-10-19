@@ -37,6 +37,8 @@ BUCKET="${BUCKET:-aaden-backend}"
 REGION="${AWS_REGION:-eu-central-1}"
 PUBLIC="https://$BUCKET.s3.$REGION.amazonaws.com/appcenter"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# 和 build-appcenter-artifact.sh 的默认值一致（合并时从这里读各应用的 version.json）
+export APPCENTER_SRC="${APPCENTER_SRC:-$ROOT/AppCenter}"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 # shellcheck source=manifest-s3.sh
@@ -77,6 +79,16 @@ for name, entry in built.get('apps', {}).items():
         if age < min_days:
             sys.exit('  拒绝：%s 上次发布才 %.1f 天（< MIN_DAYS=%g），见脚本头注释；确认要发用 FORCE=1' % (name, age, min_days))
     entry['publishedAt'] = now.isoformat(timespec='seconds')
+    # 把 version.json 里的版本和提交也写进条目：不用下载 zip 就能知道清单里发的是哪一版（小登按版本对照用）
+    vj = os.path.join(os.environ.get('APPCENTER_SRC', ''), name, 'version.json')
+    try:
+        with open(vj, encoding='utf-8') as f:
+            v = json.load(f)
+        for k in ('version', 'commit', 'ref'):
+            if v.get(k):
+                entry[k] = v[k]
+    except (OSError, ValueError):
+        pass
     if prev:
         previous[name] = prev
     apps[name] = entry

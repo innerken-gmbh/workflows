@@ -21,6 +21,11 @@ on:
         description: '外加 deviceId % 100 < percent 的设备（0 = 只按名单）'
         required: true
         default: '0'
+      timer:
+        description: 'start = 从现在开始计 24 小时后自动全量；none = 不计时（不会自动全量，比如要等某几家店约好时间）'
+        type: choice
+        options: [start, none]
+        default: start
       channel:
         default: stable
         required: true
@@ -50,4 +55,5 @@ jobs:
           DEVICES: ${{ inputs.devices }}
           PERCENT: ${{ inputs.percent }}
           CHANNEL: ${{ inputs.channel }}
-        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" widen "$APP" "$KIND" "$DEVICES" "$PERCENT"
+          TIMER: ${{ inputs.timer }}
+        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" widen "$APP" "$KIND" "$DEVICES" "$PERCENT" "$TIMER"
