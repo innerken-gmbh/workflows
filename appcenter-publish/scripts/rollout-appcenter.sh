@@ -95,11 +95,17 @@ elif action == 'widen':
     e = (m.get(kind) or {}).get(app)
     if not e:
         sys.exit('%s 里没有 %s' % (kind, app))
-    try:
-        devices = [int(x) for x in os.environ.get('WIDEN_DEVICES', '').split(',') if x.strip()]
-        percent = int(os.environ.get('WIDEN_PERCENT') or '0')
-    except ValueError:
-        sys.exit('devices 要逗号分隔的设备号，percent 要整数')
+    if e.get('rollout') is None:
+        sys.exit('%s 已经是全量（没有 rollout），widen 不会把它收窄回灰度；要重新灰度就重新发布' % app)
+    import re
+    raw_devices = os.environ.get('WIDEN_DEVICES', '').strip()
+    raw_percent = os.environ.get('WIDEN_PERCENT', '').strip() or '0'
+    if raw_devices and not re.fullmatch(r'[0-9]+(,[0-9]+)*', raw_devices):
+        sys.exit('devices 只能是逗号分隔的设备号：%s' % raw_devices)
+    if not re.fullmatch(r'[0-9]+', raw_percent):
+        sys.exit('percent 只能是 0–100 的整数：%s' % raw_percent)
+    devices = [int(x) for x in raw_devices.split(',')] if raw_devices else []
+    percent = int(raw_percent)
     if not 0 <= percent <= 100:
         sys.exit('percent 要在 0–100 之间')
     if not devices and percent == 0:

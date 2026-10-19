@@ -94,12 +94,10 @@ if per_app:
                 apps[name] = dict(entry, rollout=old['rollout'])
     only = os.environ.get('APP_ROLLOUT_DEVICES', '').strip()
     if only:
-        try:
-            only_devices = [int(x) for x in only.split(',') if x.strip()]
-        except ValueError:
+        import re
+        if not re.fullmatch(r'[0-9]+(,[0-9]+)*', only):
             sys.exit('APP_ROLLOUT_DEVICES 只能是逗号分隔的设备号：%s' % only)
-        if not only_devices:
-            sys.exit('APP_ROLLOUT_DEVICES 没有设备号：%s' % only)
+        only_devices = [int(x) for x in only.split(',')]
     for name in changed:
         if only:
             # 只放名单里的设备，不写开始时间：不会被 promote 自动放量，要用 widen 扩大

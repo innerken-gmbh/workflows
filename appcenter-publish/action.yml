@@ -45,8 +45,11 @@ runs:
         APP: ${{ inputs.app }}
         DIST: ${{ inputs.dist }}
         VERSION_IN: ${{ inputs.version }}
+        ROLLOUT_DEVICES_IN: ${{ inputs.rollout-devices }}
       run: |
         [[ "$APP" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "app 名不合法: $APP"; exit 1; }
+        # 在构建打包之前就拦：int() 会接受 9_020、-5 这类写法
+        [ -z "$ROLLOUT_DEVICES_IN" ] || [[ "$ROLLOUT_DEVICES_IN" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo "::error::rollout-devices 只能是逗号分隔的设备号（例如 9020 或 9020,1001），收到「$ROLLOUT_DEVICES_IN」"; exit 1; }
         [ -f "$DIST/index.html" ] || { echo "$DIST/index.html 不存在"; exit 1; }
         SRC="$RUNNER_TEMP/appcenter-src"
         rm -rf "$SRC" && mkdir -p "$SRC/$APP"
