@@ -1,0 +1,53 @@
+# AppCenter 扩大灰度：把某个应用的灰度改成「名单 + deviceId%100<percent」，并从现在开始计时，
+# 满 24 小时由 appcenter-promote 自动全量。配合发布时的 rollout-devices（先只放几台、不自动放量）使用。
+name: appcenter-widen
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: '应用，例如 App、Admin'
+        required: true
+      kind:
+        description: 'apps = AppCenter/<app>；rootApps = docroot 根 /<app>'
+        type: choice
+        options: [apps, rootApps]
+        default: apps
+      devices:
+        description: '名单里的设备号，逗号分隔（可以为空，只按百分比）'
+        required: false
+        default: ''
+      percent:
+        description: '外加 deviceId % 100 < percent 的设备（0 = 只按名单）'
+        required: true
+        default: '0'
+      channel:
+        default: stable
+        required: true
+
+concurrency:
+  group: appcenter-manifest
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  widen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Widen
+        env:
+          BUCKET: ${{ vars.BACKEND_BUCKET }}
+          APP: ${{ inputs.app }}
+          KIND: ${{ inputs.kind }}
+          DEVICES: ${{ inputs.devices }}
+          PERCENT: ${{ inputs.percent }}
+          CHANNEL: ${{ inputs.channel }}
+        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" widen "$APP" "$KIND" "$DEVICES" "$PERCENT"

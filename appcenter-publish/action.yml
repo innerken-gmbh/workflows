@@ -23,6 +23,11 @@ inputs:
   version:
     description: 写进 version.json 的版本号；不填就读调用方仓库根目录 package.json 的 version
     default: ""
+  rollout-devices:
+    description: >-
+      只放这些设备（逗号分隔的设备号，例如 9020）。填了：换了内容的应用灰度 = 这个名单、percent 0、不写开始时间（不会自动全量），
+      之后用 appcenter-widen 扩大并开始计 24 小时。不填：默认自动灰度（ik0001 + deviceId%100<10，满 24 小时自动全量）
+    default: ""
   role-to-assume:
     description: AWS OIDC 角色 ARN（dry-run 可不填）
     default: ""
@@ -75,5 +80,6 @@ runs:
         AWS_REGION: ${{ inputs.aws-region }}
         FORCE: "1"
         AUTO_ROLLOUT: "1"
+        APP_ROLLOUT_DEVICES: ${{ inputs.rollout-devices }}
         APPCENTER_KIND: ${{ inputs.kind }}
       run: bash "$GITHUB_ACTION_PATH/scripts/publish-appcenter-artifact.sh" "$CHANNEL" "$APP"

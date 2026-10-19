@@ -25,6 +25,8 @@
 #   顶层 rollout：按应用灰度时不再设（POS-157）。新 CLI 用顶层 rollout 决定 ensureNoCache，以前「还有应用在灰度就保持
 #   ik0001 + 10%」把 index.html no-cache 卡在了 10%；不认 perAppRollout 的老 CLI（< 1.6.119，10-15 只剩 8 台）因此不再灰度。
 #   第一次切到按应用时，没有自己 rollout 的应用继承当时的顶层 rollout（没有开始时间 = 不自动放量）。
+#   APP_ROLLOUT_DEVICES=9020[,…]：换了内容的应用只放这些设备（percent 0、不写开始时间 = 不自动放量），
+#   之后用 rollout-appcenter.sh widen 扩大并开始计 24 小时。
 #
 # 需要能写 BUCKET 的 AWS 凭据（本地 aws 配置，或 GitHub Actions 的 publish-appcenter-artifact 工作流）。
 set -euo pipefail
@@ -90,9 +92,22 @@ if per_app:
         for name, entry in apps.items():
             if name not in changed and 'rollout' not in entry:
                 apps[name] = dict(entry, rollout=old['rollout'])
+    only = os.environ.get('APP_ROLLOUT_DEVICES', '').strip()
+    if only:
+        try:
+            only_devices = [int(x) for x in only.split(',') if x.strip()]
+        except ValueError:
+            sys.exit('APP_ROLLOUT_DEVICES 只能是逗号分隔的设备号：%s' % only)
+        if not only_devices:
+            sys.exit('APP_ROLLOUT_DEVICES 没有设备号：%s' % only)
     for name in changed:
-        apps[name] = dict(apps[name], rollout={'devices': [1], 'percent': 10},
-                          rolloutStartedAt=now.isoformat(timespec='seconds'))
+        if only:
+            # 只放名单里的设备，不写开始时间：不会被 promote 自动放量，要用 widen 扩大
+            entry = {k: v for k, v in apps[name].items() if k != 'rolloutStartedAt'}
+            apps[name] = dict(entry, rollout={'devices': only_devices, 'percent': 0})
+        else:
+            apps[name] = dict(apps[name], rollout={'devices': [1], 'percent': 10},
+                              rolloutStartedAt=now.isoformat(timespec='seconds'))
     other = old.get('rootApps' if kind == 'apps' else 'apps', {})
     # 顶层 rollout 不再为老 CLI 卡 10%（POS-157，见脚本头）；要手动设还可以用 ROLLOUT_DEVICES / ROLLOUT_PERCENT
     rollout = None
