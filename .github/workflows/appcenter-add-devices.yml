@@ -1,0 +1,63 @@
+# AppCenter 灰度名单里加设备：只把 1–3 台加进某个应用现有的灰度名单，不改百分比、不改开始时间、不碰别的应用。
+# 给群助手「小登」（GitHub App aaden-bot）用：门店要求「保证某台的 AppCenter/<应用> 是清单里的版本」，而这台被灰度挡住时，
+# 先加进名单，再对那台下发 APPCENTER_SYNC。机器人那边只触发这一个 workflow，ref 固定 main；人也可以手动跑。
+name: appcenter-add-devices
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: '应用，例如 App、Admin'
+        required: true
+      kind:
+        description: 'apps = AppCenter/<app>；rootApps = docroot 根 /<app>'
+        type: choice
+        options: [apps, rootApps]
+        default: apps
+      devices:
+        description: '要加进名单的设备号，1–3 个，逗号分隔'
+        required: true
+      reason:
+        description: '为什么加（谁要求的），只记在运行日志里'
+        required: false
+        default: ''
+      channel:
+        default: stable
+        required: true
+
+concurrency:
+  group: appcenter-manifest
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      # 只跑 main 上的代码：别的分支上的脚本可能被改过，而 AWS 角色能写清单
+      - name: 校验
+        env:
+          APP: ${{ inputs.app }}
+          DEVICES: ${{ inputs.devices }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::只能从 main 运行"; exit 1; }
+          [[ "$APP" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::app 名不合法：$APP"; exit 1; }
+          [[ "$DEVICES" =~ ^[0-9]+(,[0-9]+){0,2}$ ]] || { echo "::error::devices 要 1–3 个逗号分隔的设备号，收到「$DEVICES」"; exit 1; }
+          echo "触发人：$GITHUB_ACTOR；原因：${REASON:-（没填）}"
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Add devices
+        env:
+          BUCKET: ${{ vars.BACKEND_BUCKET }}
+          APP: ${{ inputs.app }}
+          KIND: ${{ inputs.kind }}
+          DEVICES: ${{ inputs.devices }}
+          CHANNEL: ${{ inputs.channel }}
+        run: bash appcenter-publish/scripts/rollout-appcenter.sh "$CHANNEL" add-devices "$APP" "$KIND" "$DEVICES"
