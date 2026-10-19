@@ -139,7 +139,9 @@ elif action == 'add-devices':
     raw = os.environ.get('WIDEN_DEVICES', '').strip()
     if not re.fullmatch(r'[0-9]+(,[0-9]+){0,2}', raw):
         sys.exit('devices 要 1–3 个逗号分隔的设备号：%s' % raw)
-    add = [int(x) for x in raw.split(',')]
+    add = list(dict.fromkeys(int(x) for x in raw.split(',')))  # 去重
+    if 0 in add:
+        sys.exit('设备号不能是 0')
     label = app if kind == 'apps' else '/' + app
     r = e.get('rollout')
     if r is None:
